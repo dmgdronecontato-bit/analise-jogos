@@ -4,14 +4,14 @@ import requests
 from datetime import datetime
 import pytz
 
-st.set_page_config(page_title="Painel de Jogos", layout="wide")
+st.set_page_config(page_title="Painel de Jogos - Betano", layout="wide")
 st.title("🎲 Painel de Jogos e Odds - Estilo Betano")
 
 # =========================
 # Configuração da API
 # =========================
-API_KEY = st.secrets["FOOTBALL_API_KEY"]
-headers = {"X-Auth-Token": API_KEY}
+API_KEY = st.secrets["BETANO_API_KEY"]
+headers = {"Authorization": f"Bearer {API_KEY}"}
 
 # Competitions
 competitions = {
@@ -81,6 +81,15 @@ for match in data.get("matches", []):
     casa_escudo = match["homeTeam"].get("crest", "")
     fora_escudo = match["awayTeam"].get("crest", "")
 
+    # Odds da Betano
+    odds_url = f"https://api.betano.com.br/v1/odds/{match['id']}"
+    odds_response = requests.get(odds_url, headers=headers)
+    odds = {"home": "N/A", "draw": "N/A", "away": "N/A"}
+    if odds_response.status_code == 200:
+        odds_data = odds_response.json()
+        if "Betano" in odds_data.get("bookmakers", {}):
+            odds = odds_data["bookmakers"]["Betano"][0]["odds"][0]
+
     jogos_filtrados.append({
         "data": dt_brasil.strftime("%d/%m/%Y"),
         "hora": dt_brasil.strftime("%H:%M"),
@@ -89,7 +98,8 @@ for match in data.get("matches", []):
         "status": status,
         "rodada": match.get("matchday", ""),
         "casa_escudo": casa_escudo,
-        "fora_escudo": fora_escudo
+        "fora_escudo": fora_escudo,
+        "odds": odds
     })
 
 # Ordenar por data e hora
@@ -117,9 +127,9 @@ else:
                     <strong>{row['hora']}</strong> | Rodada: {row['rodada']} | Status: {row['status']}
                 </div>
                 <div style="display:flex; gap:5px;">
-                    <div style="background:#1E90FF; color:white; padding:5px 10px; border-radius:5px;">1.75</div>
-                    <div style="background:#808080; color:white; padding:5px 10px; border-radius:5px;">3.50</div>
-                    <div style="background:#FF4500; color:white; padding:5px 10px; border-radius:5px;">3.20</div>
+                    <div style="background:#1E90FF; color:white; padding:5px 10px; border-radius:5px;">{row['odds']['home']}</div>
+                    <div style="background:#808080; color:white; padding:5px 10px; border-radius:5px;">{row['odds']['draw']}</div>
+                    <div style="background:#FF4500; color:white; padding:5px 10px; border-radius:5px;">{row['odds']['away']}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
