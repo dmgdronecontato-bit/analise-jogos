@@ -1,117 +1,120 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 
-st.set_page_config(page_title="Painel de Jogos", layout="wide")
-st.title("🎲 Painel de Jogos e Odds - TheOddsAPI")
+st.set_page_config(page_title="Painel de Jogos e Odds", layout="wide")
+st.title("🎲 Painel de Jogos, Escudos e Odds - API-Football")
 
 # =========================
-# Configuração das API Keys
+# API Key
 # =========================
-THEODDS_API_KEY = st.secrets["THEODDS_API_KEY"]
+API_FOOTBALL_KEY = st.secrets["API_FOOTBALL_KEY"]
+headers = {"x-apisports-key": API_FOOTBALL_KEY}
 
 # =========================
-# Competitions (exemplo)
+# Campeonatos disponíveis
 # =========================
 competitions = {
-    "Premier League": "soccer_epl",
-    "Serie A": "soccer_italy_serie_a",
-    "Campeonato Brasileiro": "soccer_brazil_campeonato_brasileiro",
-    "UEFA Champions League": "soccer_uefa_champs_league",
-    "FIFA World Cup": "soccer_fifa_world_cup"
+    "Campeonato Brasileiro Série A": 71,
+    "Premier League": 39,
+    "Serie A (Itália)": 135,
+    "UEFA Champions League": 2,
+    "FIFA World Cup": 1
 }
 
-# Dropdown de campeonato
-champ = st.selectbox("Selecione a competição:", list(competitions.keys()))
-sport_key = competitions[champ]
-
-# Dropdown de filtro de status
-status_filter = st.selectbox(
+# =========================
+# Sidebar - filtros
+# =========================
+st.sidebar.header("Filtros")
+champ = st.sidebar.selectbox("Selecione o campeonato:", list(competitions.keys()))
+status_filter = st.sidebar.selectbox(
     "Filtrar jogos por status:",
     ["Todos", "Somente Hoje", "Em andamento", "Próximos", "Finalizados"]
 )
 
+league_id = competitions[champ]
+
 # =========================
-# Buscar jogos da TheOddsAPI
+# Buscar jogos da API-Football
 # =========================
-url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
+tz_brasil = pytz.timezone("America/Sao_Paulo")
+hoje = datetime.now(tz_brasil)
+
+# Pegando os próximos 50 jogos da liga
+url = "https://v3.football.api-sports.io/fixtures"
 params = {
-    "apiKey": THEODDS_API_KEY,
-    "regions": "eu,us",  # Europa e EUA
-    "markets": "h2h",    # 1X2
-    "oddsFormat": "decimal"
+    "league": league_id,
+    "season": 2025,  # temporada
+    "next": 50
 }
-
-response = requests.get(url, params=params)
-
+response = requests.get(url, headers=headers, params=params)
 if response.status_code != 200:
     st.error(f"Erro ao buscar dados da API. Status code: {response.status_code}")
     st.stop()
 
-data = response.json()
-tz_brasil = pytz.timezone("America/Sao_Paulo")
-hoje = datetime.now(tz_brasil)
+data = response.json()["response"]
 
 # =========================
 # Processar jogos
 # =========================
 jogos_filtrados = []
 
-for match in data:
-    # Data do jogo
-    dt_utc = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
+for item in data:
+    fixture = item["fixture"]
+    teams = item["teams"]
+    goals = item["goals"]
+
+    dt_utc = datetime.fromisoformat(fixture["date"].replace("Z", "+00:00"))
     dt_brasil = dt_utc.astimezone(tz_brasil)
-    
+
     # Status do jogo
-    if match.get("status") in ["inprogress", "live"]:
+    status_api = fixture["status"]["short"]
+    if status_api in ["1H", "2H", "LIVE"]:
         status = "Em andamento"
     elif dt_brasil.date() < hoje.date():
         status = "Finalizados"
     else:
         status = "Próximos"
-    
-    # Filtro
+
+    # Filtrar
     if status_filter != "Todos":
         if status_filter == "Somente Hoje" and dt_brasil.date() != hoje.date():
             continue
         elif status_filter not in ["Todos", "Somente Hoje"] and status != status_filter:
             continue
 
-    # Times
-    home_team = match["home_team"]
-    away_team = match["away_team"]
-    
-    # Odds (primeira casa de apostas disponível)
-    odds_home = odds_draw = odds_away = "N/A"
-    if match.get("bookmakers"):
-        first_bookmaker = match["bookmakers"][0]
-        for market in first_bookmaker["markets"]:
-            if market["key"] == "h2h":
-                odds_list = market["outcomes"]
-                if len(odds_list) == 2:  # apenas dois outcomes (home/away)
-                    odds_home = odds_list[0]["price"]
-                    odds_away = odds_list[1]["price"]
-                    odds_draw = "-"
-                elif len(odds_list) == 3:  # 1X2
-                    odds_home = odds_list[0]["price"]
-                    odds_draw = odds_list[1]["price"]
-                    odds_away = odds_list[2]["price"]
-
-    # Escudos fictícios (pode substituir por API real ou imagens locais)
-    escudo_home = f"https://logo.clearbit.com/{home_team.replace(' ', '').lower()}.com"
-    escudo_away = f"https://logo.clearbit.com/{away_team.replace(' ', '').lower()}.com"
+    # Odds 1X2 (quando disponível)
+    odds_data = item.get("odds", [])
+    # API gratuita geralmente não retorna odds detalhadas
+    # Para testes, podemos simular odds aleatórias se não houver
+    if odds_data:
+        # Pega primeiro bookmaker e as odds de 1X2
+        bookmaker = odds_data[0]
+        try:
+            odds_1x2 = bookmaker["bets"][0]["values"]  # valores 1X2
+            odd_home = odds_1x2[0]["odd"]
+            odd_draw = odds_1x2[1]["odd"]
+            odd_away = odds_1x2[2]["odd"]
+        except:
+            odd_home, odd_draw, odd_away = "-", "-", "-"
+    else:
+        odd_home, odd_draw, odd_away = "-", "-", "-"
 
     jogos_filtrados.append({
         "data": dt_brasil.strftime("%d/%m/%Y"),
         "hora": dt_brasil.strftime("%H:%M"),
-        "casa": home_team,
-        "fora": away_team,
+        "home": teams["home"]["name"],
+        "away": teams["away"]["name"],
+        "home_escudo": teams["home"]["logo"],
+        "away_escudo": teams["away"]["logo"],
         "status": status,
-        "casa_escudo": escudo_home,
-        "fora_escudo": escudo_away,
-        "odds": {"home": odds_home, "draw": odds_draw, "away": odds_away}
+        "goals_home": goals["home"],
+        "goals_away": goals["away"],
+        "odd_home": odd_home,
+        "odd_draw": odd_draw,
+        "odd_away": odd_away
     })
 
 # Ordenar por data e hora
@@ -129,19 +132,19 @@ else:
             st.markdown(f"""
             <div style="border:1px solid #ccc; border-radius:10px; margin-bottom:10px; padding:10px; display:flex; align-items:center; background:#f0f2f6;">
                 <div style="width:90px; text-align:center; font-weight:bold;">
-                    <img src="{row['casa_escudo']}" width="50"><br>{row['casa']}
+                    <img src="{row['home_escudo']}" width="50"><br>{row['home']}
                 </div>
                 <div style="width:30px; text-align:center; font-size:20px;"><strong>X</strong></div>
                 <div style="width:90px; text-align:center; font-weight:bold;">
-                    <img src="{row['fora_escudo']}" width="50"><br>{row['fora']}
+                    <img src="{row['away_escudo']}" width="50"><br>{row['away']}
                 </div>
                 <div style="margin-left:20px; flex-grow:1;">
                     <strong>{row['hora']}</strong> | Status: {row['status']}
                 </div>
                 <div style="display:flex; gap:5px;">
-                    <div style="background:#1E90FF; color:white; padding:5px 10px; border-radius:5px;">{row['odds']['home']}</div>
-                    <div style="background:#808080; color:white; padding:5px 10px; border-radius:5px;">{row['odds']['draw']}</div>
-                    <div style="background:#FF4500; color:white; padding:5px 10px; border-radius:5px;">{row['odds']['away']}</div>
+                    <div style="background:#1E90FF; color:white; padding:5px 10px; border-radius:5px;">{row['odd_home']}</div>
+                    <div style="background:#808080; color:white; padding:5px 10px; border-radius:5px;">{row['odd_draw']}</div>
+                    <div style="background:#FF4500; color:white; padding:5px 10px; border-radius:5px;">{row['odd_away']}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
