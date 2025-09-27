@@ -1,30 +1,31 @@
 import streamlit as st
-import pandas as pd
 import requests
-from datetime import datetime
+import pandas as pd
+from datetime import datetime, timedelta
 import pytz
 
-st.set_page_config(page_title="Painel de Jogos - Betano", layout="wide")
-st.title("🎲 Painel de Jogos e Odds - Estilo Betano")
+st.set_page_config(page_title="Painel de Jogos", layout="wide")
+st.title("🎲 Painel de Jogos e Odds - TheOddsAPI")
 
 # =========================
-# Configuração da API
+# Configuração das API Keys
 # =========================
-API_KEY = st.secrets["BETANO_API_KEY"]
-headers = {"Authorization": f"Bearer {API_KEY}"}
+THEODDS_API_KEY = st.secrets["THEODDS_API_KEY"]
 
-# Competitions
+# =========================
+# Competitions (exemplo)
+# =========================
 competitions = {
-    "PL - Premier League": "PL",
-    "SA - Serie A": "SA",
-    "BSA - Campeonato Brasileiro Série A": "BSA",
-    "CL - UEFA Champions League": "CL",
-    "WC - FIFA World Cup": "WC"
+    "Premier League": "soccer_epl",
+    "Serie A": "soccer_italy_serie_a",
+    "Campeonato Brasileiro": "soccer_brazil_campeonato_brasileiro",
+    "UEFA Champions League": "soccer_uefa_champs_league",
+    "FIFA World Cup": "soccer_fifa_world_cup"
 }
 
 # Dropdown de campeonato
 champ = st.selectbox("Selecione a competição:", list(competitions.keys()))
-comp_id = competitions[champ]
+sport_key = competitions[champ]
 
 # Dropdown de filtro de status
 status_filter = st.selectbox(
@@ -33,73 +34,84 @@ status_filter = st.selectbox(
 )
 
 # =========================
-# Buscar jogos da API
+# Buscar jogos da TheOddsAPI
 # =========================
-url = f"https://api.football-data.org/v4/competitions/{comp_id}/matches"
-response = requests.get(url, headers=headers)
+url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
+params = {
+    "apiKey": THEODDS_API_KEY,
+    "regions": "eu,us",  # Europa e EUA
+    "markets": "h2h",    # 1X2
+    "oddsFormat": "decimal"
+}
+
+response = requests.get(url, params=params)
 
 if response.status_code != 200:
-    st.error("Erro ao buscar dados da API. Verifique sua chave e conexão.")
-    data = {"matches": []}
-else:
-    data = response.json()
+    st.error(f"Erro ao buscar dados da API. Status code: {response.status_code}")
+    st.stop()
 
-# =========================
-# Configuração de timezone e mapeamento status
-# =========================
+data = response.json()
 tz_brasil = pytz.timezone("America/Sao_Paulo")
-status_map = {
-    "SCHEDULED": "Próximos",
-    "LIVE": "Em andamento",
-    "IN_PLAY": "Em andamento",
-    "PAUSED": "Em andamento",
-    "FINISHED": "Finalizados",
-    "POSTPONED": "Adiado",
-    "CANCELED": "Cancelado"
-}
+hoje = datetime.now(tz_brasil)
 
 # =========================
 # Processar jogos
 # =========================
 jogos_filtrados = []
 
-for match in data.get("matches", []):
-    # Converte data para Brasil
-    dt_utc = datetime.fromisoformat(match["utcDate"].replace("Z", "+00:00"))
+for match in data:
+    # Data do jogo
+    dt_utc = datetime.fromisoformat(match["commence_time"].replace("Z", "+00:00"))
     dt_brasil = dt_utc.astimezone(tz_brasil)
-    status = status_map.get(match["status"], match["status"])
-
-    # Filtro de status
+    
+    # Status do jogo
+    if match.get("status") in ["inprogress", "live"]:
+        status = "Em andamento"
+    elif dt_brasil.date() < hoje.date():
+        status = "Finalizados"
+    else:
+        status = "Próximos"
+    
+    # Filtro
     if status_filter != "Todos":
-        if status_filter == "Somente Hoje":
-            if dt_brasil.date() != datetime.now(tz_brasil).date():
-                continue
-        elif status != status_filter:
+        if status_filter == "Somente Hoje" and dt_brasil.date() != hoje.date():
+            continue
+        elif status_filter not in ["Todos", "Somente Hoje"] and status != status_filter:
             continue
 
-    # Escudos (se disponíveis)
-    casa_escudo = match["homeTeam"].get("crest", "")
-    fora_escudo = match["awayTeam"].get("crest", "")
+    # Times
+    home_team = match["home_team"]
+    away_team = match["away_team"]
+    
+    # Odds (primeira casa de apostas disponível)
+    odds_home = odds_draw = odds_away = "N/A"
+    if match.get("bookmakers"):
+        first_bookmaker = match["bookmakers"][0]
+        for market in first_bookmaker["markets"]:
+            if market["key"] == "h2h":
+                odds_list = market["outcomes"]
+                if len(odds_list) == 2:  # apenas dois outcomes (home/away)
+                    odds_home = odds_list[0]["price"]
+                    odds_away = odds_list[1]["price"]
+                    odds_draw = "-"
+                elif len(odds_list) == 3:  # 1X2
+                    odds_home = odds_list[0]["price"]
+                    odds_draw = odds_list[1]["price"]
+                    odds_away = odds_list[2]["price"]
 
-    # Odds da Betano
-    odds_url = f"https://api.betano.com.br/v1/odds/{match['id']}"
-    odds_response = requests.get(odds_url, headers=headers)
-    odds = {"home": "N/A", "draw": "N/A", "away": "N/A"}
-    if odds_response.status_code == 200:
-        odds_data = odds_response.json()
-        if "Betano" in odds_data.get("bookmakers", {}):
-            odds = odds_data["bookmakers"]["Betano"][0]["odds"][0]
+    # Escudos fictícios (pode substituir por API real ou imagens locais)
+    escudo_home = f"https://logo.clearbit.com/{home_team.replace(' ', '').lower()}.com"
+    escudo_away = f"https://logo.clearbit.com/{away_team.replace(' ', '').lower()}.com"
 
     jogos_filtrados.append({
         "data": dt_brasil.strftime("%d/%m/%Y"),
         "hora": dt_brasil.strftime("%H:%M"),
-        "casa": match["homeTeam"]["name"],
-        "fora": match["awayTeam"]["name"],
+        "casa": home_team,
+        "fora": away_team,
         "status": status,
-        "rodada": match.get("matchday", ""),
-        "casa_escudo": casa_escudo,
-        "fora_escudo": fora_escudo,
-        "odds": odds
+        "casa_escudo": escudo_home,
+        "fora_escudo": escudo_away,
+        "odds": {"home": odds_home, "draw": odds_draw, "away": odds_away}
     })
 
 # Ordenar por data e hora
@@ -124,7 +136,7 @@ else:
                     <img src="{row['fora_escudo']}" width="50"><br>{row['fora']}
                 </div>
                 <div style="margin-left:20px; flex-grow:1;">
-                    <strong>{row['hora']}</strong> | Rodada: {row['rodada']} | Status: {row['status']}
+                    <strong>{row['hora']}</strong> | Status: {row['status']}
                 </div>
                 <div style="display:flex; gap:5px;">
                     <div style="background:#1E90FF; color:white; padding:5px 10px; border-radius:5px;">{row['odds']['home']}</div>
